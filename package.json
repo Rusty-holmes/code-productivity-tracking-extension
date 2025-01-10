@@ -1,0 +1,44 @@
+{
+  "name": "code-tracking",
+  "displayName": "Code Tracking",
+  "description": "Track coding time and commit to GitHub repository",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "code-tracking.startTracking",
+        "title": "Start Code Tracking"
+      },
+      {
+        "command": "code-tracking.stopTracking",
+        "title": "Stop Code Tracking"
+      }
+    ]
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "pretest": "npm run lint",
+    "test": "node ./test/runTest.js"
+  },
+  "dependencies": {
+    "simple-git": "^3.22.0",
+    "moment": "^2.29.4",
+    "axios": "^1.6.2"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.60.0",
+    "@types/node": "^16.11.7",
+    "eslint": "^8.47.0",
+    "typescript": "^5.1.6"
+  }
+}
