@@ -1,5 +1,5 @@
 # VS Code files
-.vscode/
+# Keeping .vscode directory for development setup
 *.vsix
 
 # Node modules
