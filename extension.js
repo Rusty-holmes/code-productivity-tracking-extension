@@ -16,8 +16,8 @@ let REPO_NAME = 'code-tracking-stats'; // Will be updated from settings
 
 function loadConfiguration() {
     const config = vscode.workspace.getConfiguration('codeTracking');
-    REPO_NAME = config.get('repositoryName', 'code-tracking-stats');
-    COMMIT_INTERVAL = config.get('commitInterval', 1800000); // 30 minutes default
+    // REPO_NAME = config.get('repositoryName', 'code-tracking-stats');
+    COMMIT_INTERVAL = config.get('commitInterval', 60000); // 30 minutes default
     console.log(`Loaded configuration: Repository=${REPO_NAME}, Interval=${COMMIT_INTERVAL}ms`);
 }
 
@@ -125,8 +125,23 @@ async function updateStatusBar() {
 
 async function activate(context) {
     console.log('Activating Code Productivity Tracking extension...');
+
+    // Get the directory of the opened workspace or folder
+    const workspaceDir = vscode.workspace.workspaceFolders 
+        ? vscode.workspace.workspaceFolders[0].uri.fsPath 
+        : null;
+    
+    if (workspaceDir) {
+        console.log(`Workspace directory is: ${workspaceDir}`);
+    } else {
+        vscode.window.showErrorMessage("No workspace folder open.");
+        return;
+    }
+
+    const git = simpleGit({ baseDir: workspaceDir }); // Set the correct directory for git operations
+
+
     globalState = context.globalState;
-    const git = simpleGit();
     const dataFile = path.join(context.globalStoragePath, 'coding-data.json');
 
     // Load configuration
@@ -183,6 +198,7 @@ async function activate(context) {
             // Get user info first
             const userInfo = await getUserInfo(token);
             username = userInfo.login;
+            email = userInfo.email;
             console.log(`Starting tracking for GitHub user: ${username}`);
 
             // Create or ensure repository exists
@@ -205,7 +221,7 @@ async function activate(context) {
                 console.log('Configuring Git remote...');
                 await git.addRemote('origin', `https://${username}:${token}@github.com/${username}/${REPO_NAME}.git`);
             }
-
+            
             isTracking = true;
             sessionStart = new Date(globalState.get('sessionStart') || new Date());
             await globalState.update('sessionStart', sessionStart);
@@ -239,10 +255,13 @@ async function activate(context) {
                     fs.writeFileSync(dataFile, JSON.stringify(trackingData, null, 2));
 
                     try {
-                        await git.add('.');
+                        await git.add('-A');
+                        console.log('Changes staged');
                         await git.commit(`Update coding stats: ${currentTime.toISOString()}\nTotal coding time: ${Math.floor(trackingData.totalTime / 3600)} hours ${Math.floor((trackingData.totalTime % 3600) / 60)} minutes`);
+                        console.log('Commit successful');
                         console.log('Pushing changes to GitHub...');
                         await git.push('origin', 'main');
+                        console.log('Push successful');
                         lastCommitTime = currentTime;
                         await globalState.update('lastCommitTime', lastCommitTime.toISOString());
                         
