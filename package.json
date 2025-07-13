@@ -1,16 +1,17 @@
 {
-  "name": "code-productivity-tracking",
-  "displayName": "Code Productivity Tracking",
-  "description": "Track your coding time and commit statistics to a private GitHub repository",
-  "version": "0.0.1",
+  "name": "code-productivity-tracker",
+  "displayName": "Code Productivity Tracker",
+  "description": "Automatically tracks and commits your coding time to a GitHub private repo.",
+  "version": "1.0.0",
+  "publisher": "your-publisher-name",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.60.0"
   },
-  "categories": [
-    "Other"
+  "activationEvents": [
+    "onCommand:code-tracking.startTracking",
+    "onCommand:code-tracking.stopTracking"
   ],
-  "activationEvents": [],
-  "main": "./extension.js",
+  "main": "extension.js",
   "contributes": {
     "commands": [
       {
@@ -23,48 +24,26 @@
       }
     ],
     "configuration": {
-      "title": "Code Productivity Tracking",
+      "type": "object",
+      "title": "Code Tracking",
       "properties": {
         "codeTracking.repositoryName": {
           "type": "string",
           "default": "code-tracking-stats",
-          "description": "Name of the private GitHub repository where your coding statistics will be stored"
+          "description": "Name of the GitHub repository to store tracking data."
         },
         "codeTracking.commitInterval": {
           "type": "number",
           "default": 1800000,
-          "description": "Interval (in milliseconds) between commits of your coding statistics. Default is 30 minutes"
+          "description": "Interval in milliseconds between automatic commits."
         }
       }
     }
   },
-  "scripts": {
-    "lint": "eslint .",
-    "pretest": "npm run lint",
-    "test": "node ./test/runTest.js"
-  },
   "dependencies": {
-    "simple-git": "^3.22.0"
+    "simple-git": "^3.0.0"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
-    "@types/mocha": "^10.0.6",
-    "@types/node": "18.x",
-    "eslint": "^8.56.0",
-    "glob": "^10.3.10",
-    "mocha": "^10.2.0",
-    "typescript": "^5.3.3",
-    "@vscode/test-electron": "^2.3.8"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Rusty-holmes/code-productivity-tracking-extension.git"
-  },
-  "keywords": [
-    "productivity",
-    "tracking",
-    "coding time",
-    "statistics",
-    "github"
-  ]
+    "vscode": "^1.1.37"
+  }
 }

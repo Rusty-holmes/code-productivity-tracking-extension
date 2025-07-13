@@ -1,3 +1,4 @@
+
 const vscode = require('vscode');
 const simpleGit = require('simple-git');
 const path = require('path');
@@ -6,23 +7,23 @@ const https = require('https');
 
 let trackingInterval;
 let statusBarItem;
-let COMMIT_INTERVAL = 1 * 60 * 1000; // Will be updated from settings
+let COMMIT_INTERVAL;
 let lastCommitTime;
 let isTracking = false;
 let sessionStart;
 let globalState;
+let storagePath;
 let username = '';
-let REPO_NAME = 'code-tracking-stats'; // Will be updated from settings
+let REPO_NAME;
 
 function loadConfiguration() {
     const config = vscode.workspace.getConfiguration('codeTracking');
-    // REPO_NAME = config.get('repositoryName', 'code-tracking-stats');
-    COMMIT_INTERVAL = config.get('commitInterval', 60000); // 30 minutes default
+    REPO_NAME = config.get('repositoryName', 'code-tracking-stats');
+    COMMIT_INTERVAL = config.get('commitInterval', 1800000); // 30 minutes default
     console.log(`Loaded configuration: Repository=${REPO_NAME}, Interval=${COMMIT_INTERVAL}ms`);
 }
 
 async function getUserInfo(token) {
-    console.log('Fetching user info from GitHub...');
     return new Promise((resolve, reject) => {
         const options = {
             hostname: 'api.github.com',
@@ -34,35 +35,22 @@ async function getUserInfo(token) {
                 'Accept': 'application/vnd.github.v3+json'
             }
         };
-
         const req = https.request(options, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
-                if (res.statusCode === 200) {
-                    const userInfo = JSON.parse(data);
-                    console.log(`Successfully fetched user info for: ${userInfo.login}`);
-                    resolve(userInfo);
-                } else {
-                    reject(new Error(`Failed to get user info: ${res.statusCode} ${data}`));
-                }
+                if (res.statusCode === 200) resolve(JSON.parse(data));
+                else reject(new Error(`GitHub API ${res.statusCode}: ${data}`));
             });
         });
-
-        req.on('error', (error) => reject(error));
+        req.on('error', err => reject(err));
         req.end();
     });
 }
 
 async function createGitHubRepo(token) {
-    console.log('Creating private repository for tracking...');
+    const data = JSON.stringify({ name: REPO_NAME, private: true, description: 'Private repo for code tracking' });
     return new Promise((resolve, reject) => {
-        const data = JSON.stringify({
-            name: REPO_NAME,
-            private: true,
-            description: 'Private repository for tracking coding statistics'
-        });
-
         const options = {
             hostname: 'api.github.com',
             path: '/user/repos',
@@ -75,31 +63,16 @@ async function createGitHubRepo(token) {
                 'Content-Length': data.length
             }
         };
-
-        const req = https.request(options, (res) => {
-            let responseData = '';
-            res.on('data', (chunk) => responseData += chunk);
+        const req = https.request(options, res => {
+            let body = '';
+            res.on('data', c => body += c);
             res.on('end', () => {
-                if (res.statusCode === 201) {
-                    console.log('Successfully created private repository');
-                    resolve(JSON.parse(responseData));
-                } else {
-                    console.log(`Repository creation response: ${res.statusCode} ${responseData}`);
-                    if (res.statusCode === 422 && responseData.includes('already exists')) {
-                        console.log('Repository already exists, continuing...');
-                        resolve({ name: REPO_NAME });
-                    } else {
-                        reject(new Error(`Failed to create repository: ${res.statusCode} ${responseData}`));
-                    }
-                }
+                if (res.statusCode === 201) return resolve(JSON.parse(body));
+                if (res.statusCode === 422 && body.includes('already exists')) return resolve({ name: REPO_NAME });
+                reject(new Error(`Repo creation failed ${res.statusCode}: ${body}`));
             });
         });
-
-        req.on('error', (error) => {
-            console.error('Error creating repository:', error);
-            reject(error);
-        });
-
+        req.on('error', err => reject(err));
         req.write(data);
         req.end();
     });
@@ -107,263 +80,174 @@ async function createGitHubRepo(token) {
 
 async function updateStatusBar() {
     if (!isTracking || !statusBarItem) return;
-    
-    const currentTime = new Date();
-    const timeDiff = currentTime - lastCommitTime;
-    const remainingTime = COMMIT_INTERVAL - timeDiff;
-    
-    if (remainingTime > 0) {
-        const minutes = Math.floor(remainingTime / 60000);
-        const seconds = Math.floor((remainingTime % 60000) / 1000);
-        statusBarItem.text = `$(clock) Next commit in: ${minutes}m ${seconds}s`;
-        statusBarItem.tooltip = `Total coding time will be committed to GitHub in ${minutes} minutes and ${seconds} seconds`;
+    const now = new Date();
+    const diff = now - lastCommitTime;
+    const remain = COMMIT_INTERVAL - diff;
+    if (remain > 0) {
+        const m = Math.floor(remain/60000), s = Math.floor((remain%60000)/1000);
+        statusBarItem.text = `$(clock) Next commit in: ${m}m ${s}s`;
     } else {
-        statusBarItem.text = `$(clock) Committing...`;
-        statusBarItem.tooltip = 'Committing coding statistics to GitHub...';
+        statusBarItem.text = `$(sync~spin) Committing...`;
     }
 }
 
-async function activate(context) {
-    console.log('Activating Code Productivity Tracking extension...');
 
-    // Get the directory of the opened workspace or folder
-    const workspaceDir = vscode.workspace.workspaceFolders 
-        ? vscode.workspace.workspaceFolders[0].uri.fsPath 
-        : null;
-    
-    if (workspaceDir) {
-        console.log(`Workspace directory is: ${workspaceDir}`);
-    } else {
-        vscode.window.showErrorMessage("No workspace folder open.");
-        return;
+
+async function activate(context) {
+    globalState = context.globalState;
+    storagePath = context.globalStoragePath;
+
+    // Ensure the directory exists before using it
+    if (!fs.existsSync(storagePath)) {
+        fs.mkdirSync(storagePath, { recursive: true });
     }
 
-    const git = simpleGit({ baseDir: workspaceDir }); // Set the correct directory for git operations
+    const git = simpleGit(storagePath);
+    const dataFile = path.join(storagePath, 'coding-data.json');
 
 
-    globalState = context.globalState;
-    const dataFile = path.join(context.globalStoragePath, 'coding-data.json');
-
-    // Load configuration
     loadConfiguration();
-
-    // Listen for configuration changes
     context.subscriptions.push(
-        vscode.workspace.onDidChangeConfiguration(event => {
-            if (event.affectsConfiguration('codeTracking')) {
-                console.log('Configuration changed, reloading settings...');
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('codeTracking')) {
                 loadConfiguration();
-                vscode.window.showInformationMessage('Code Tracking settings updated. Changes will take effect on next commit.');
+                vscode.window.showInformationMessage('Code Tracking settings updated.');
             }
         })
     );
 
-    // Create status bar item
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     context.subscriptions.push(statusBarItem);
+    if (!fs.existsSync(storagePath)) fs.mkdirSync(storagePath, { recursive: true });
 
-    // Ensure the directory exists
-    if (!fs.existsSync(context.globalStoragePath)) {
-        fs.mkdirSync(context.globalStoragePath, { recursive: true });
-    }
+    const stored = globalState.get('lastCommitTime');
+    lastCommitTime = stored ? new Date(stored) : new Date();
 
-    // Load last commit time from global state
-    lastCommitTime = new Date(globalState.get('lastCommitTime') || new Date());
-    
-    let startTracking = vscode.commands.registerCommand('code-tracking.startTracking', async () => {
-        if (isTracking) {
-            vscode.window.showInformationMessage('Code tracking is already running!');
-            return;
+    const startCmd = vscode.commands.registerCommand('code-tracking.startTracking', async () => {
+        if (isTracking) return vscode.window.showInformationMessage('Tracking already running.');
+        let token = globalState.get('githubToken');
+        if (!token) {
+            token = await vscode.window.showInputBox({ prompt: 'GitHub token with repo scope', password: true });
+            if (!token) return vscode.window.showErrorMessage('Token required.');
+            await globalState.update('githubToken', token);
+        }
+        const userInfo = await getUserInfo(token);
+        username = userInfo.login;
+        await createGitHubRepo(token);
+
+        // Initialize local git repo
+        if (!fs.existsSync(path.join(storagePath, '.git'))) {
+            await git.init();
+        }
+        // Setup remote with token
+        const encoded = encodeURIComponent(token);
+        const remotes = await git.getRemotes(true);
+        const originExists = remotes.find(r => r.name === 'origin');
+
+        if (!originExists) {
+            await git.addRemote('origin', `https://${encoded}@github.com/${username}/${REPO_NAME}.git`);
+            console.log('Added remote origin');
+        } else {
+            await git.remote(['set-url', 'origin', `https://${encoded}@github.com/${username}/${REPO_NAME}.git`]);
+            console.log('Updated remote origin');
         }
 
-        try {
-            // Get GitHub token from user or stored token
-            let token = await globalState.get('githubToken');
-            if (!token) {
-                token = await vscode.window.showInputBox({
-                    prompt: 'Please enter your GitHub personal access token',
-                    password: true,
-                    placeHolder: 'Token needs repo scope permissions'
-                });
 
-                if (!token) {
-                    vscode.window.showErrorMessage('GitHub token is required to continue');
-                    return;
-                }
-
-                // Store the token securely
-                await globalState.update('githubToken', token);
-            }
-
-            // Get user info first
-            const userInfo = await getUserInfo(token);
-            username = userInfo.login;
-            email = userInfo.email;
-            console.log(`Starting tracking for GitHub user: ${username}`);
-
-            // Create or ensure repository exists
-            await createGitHubRepo(token);
-
-            // Initialize tracking data
-            let trackingData = {
-                totalTime: 0,
-                sessions: []
-            };
-
-            if (fs.existsSync(dataFile)) {
-                console.log('Loading existing tracking data...');
-                trackingData = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
-            }
-
-            // Configure git with remote if not already configured
-            const remotes = await git.getRemotes();
-            if (!remotes.find(remote => remote.name === 'origin')) {
-                console.log('Configuring Git remote...');
-                await git.addRemote('origin', `https://${username}:${token}@github.com/${username}/${REPO_NAME}.git`);
-            }
-            
-            isTracking = true;
-            sessionStart = new Date(globalState.get('sessionStart') || new Date());
-            await globalState.update('sessionStart', sessionStart);
-            console.log(`Started new coding session at: ${sessionStart.toISOString()}`);
-
-            // Show status bar
-            statusBarItem.show();
-            updateStatusBar();
-
-            // Start status bar update interval
-            const statusUpdateInterval = setInterval(updateStatusBar, 1000);
-            context.subscriptions.push({ dispose: () => clearInterval(statusUpdateInterval) });
-
-            trackingInterval = setInterval(async () => {
-                const currentTime = new Date();
-                const timeDiff = currentTime - lastCommitTime;
-
-                if (timeDiff >= COMMIT_INTERVAL) {
-                    console.log('Preparing to commit tracking data...');
-                    // Calculate total session time including previous sessions
-                    const sessionDuration = (currentTime - sessionStart) / 1000; // in seconds
-                    trackingData.totalTime += sessionDuration;
-                    trackingData.sessions.push({
-                        date: currentTime.toISOString(),
-                        duration: sessionDuration,
-                        totalTime: trackingData.totalTime
-                    });
-
-                    // Save tracking data
-                    console.log(`Saving tracking data: ${sessionDuration}s this session, ${trackingData.totalTime}s total`);
-                    fs.writeFileSync(dataFile, JSON.stringify(trackingData, null, 2));
-
-                    try {
-                        await git.add('-A');
-                        console.log('Changes staged');
-                        await git.commit(`Update coding stats: ${currentTime.toISOString()}\nTotal coding time: ${Math.floor(trackingData.totalTime / 3600)} hours ${Math.floor((trackingData.totalTime % 3600) / 60)} minutes`);
-                        console.log('Commit successful');
-                        console.log('Pushing changes to GitHub...');
-                        await git.push('origin', 'main');
-                        console.log('Push successful');
-                        lastCommitTime = currentTime;
-                        await globalState.update('lastCommitTime', lastCommitTime.toISOString());
-                        
-                        // Reset session start time after successful commit
-                        sessionStart = new Date();
-                        await globalState.update('sessionStart', sessionStart);
-                        console.log('Successfully committed and pushed tracking data');
-                        
-                        vscode.window.showInformationMessage(`Successfully committed coding stats! Total time: ${Math.floor(trackingData.totalTime / 3600)} hours ${Math.floor((trackingData.totalTime % 3600) / 60)} minutes`);
-                    } catch (error) {
-                        console.error('Failed to commit:', error);
-                        vscode.window.showErrorMessage('Failed to commit: ' + error.message);
-                    }
-                }
-            }, 60000); // Check every minute
-
-            vscode.window.showInformationMessage('Started tracking coding time!');
-        } catch (error) {
-            console.error('Failed to start tracking:', error);
-            vscode.window.showErrorMessage('Failed to start tracking: ' + error.message);
-        }
-    });
-
-    let stopTracking = vscode.commands.registerCommand('code-tracking.stopTracking', async () => {
-        if (!isTracking) {
-            vscode.window.showInformationMessage('Code tracking is not running!');
-            return;
+        // Initial commit if none
+        const log = await git.log().catch(() => ({ total: 0 }));
+        if ((log.total || 0) === 0) {
+            const initialData = { totalTime: 0, sessions: [] };
+            fs.writeFileSync(dataFile, JSON.stringify(initialData, null, 2));
+            await git.add(dataFile);
+            await git.commit('Initial commit: setup tracking');
+            await git.push('origin', 'main');
         }
 
-        try {
-            console.log('Stopping code tracking...');
-            // Perform final commit before stopping
-            const currentTime = new Date();
-            const sessionDuration = (currentTime - sessionStart) / 1000;
-            
-            let trackingData = {
-                totalTime: 0,
-                sessions: []
-            };
+        // Load or init trackingData
+        let trackingData = fs.existsSync(dataFile)
+            ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
+            : { totalTime: 0, sessions: [] };
 
-            if (fs.existsSync(dataFile)) {
-                trackingData = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
-            }
+        isTracking = true;
+        sessionStart = new Date();
+        await globalState.update('sessionStart', sessionStart.toISOString());
+        statusBarItem.show();
+        updateStatusBar();
+        context.subscriptions.push(setInterval(updateStatusBar, 1000));
 
-            trackingData.totalTime += sessionDuration;
-            trackingData.sessions.push({
-                date: currentTime.toISOString(),
-                duration: sessionDuration,
-                totalTime: trackingData.totalTime,
-                type: 'final'
-            });
-
-            console.log(`Final session duration: ${sessionDuration}s, Total time: ${trackingData.totalTime}s`);
-            fs.writeFileSync(dataFile, JSON.stringify(trackingData, null, 2));
-
-            const token = await globalState.get('githubToken');
-            if (token) {
+        trackingInterval = setInterval(async () => {
+            const now = new Date();
+            if (now - lastCommitTime >= COMMIT_INTERVAL) {
+                const sessSec = (now - sessionStart)/1000;
+                trackingData.totalTime += sessSec;
+                trackingData.sessions.push({ date: now.toISOString(), duration: sessSec, totalTime: trackingData.totalTime });
+                fs.writeFileSync(dataFile, JSON.stringify(trackingData, null, 2));
                 try {
-                    await git.add('.');
-                    await git.commit(`Final update before stopping: ${currentTime.toISOString()}\nTotal coding time: ${Math.floor(trackingData.totalTime / 3600)} hours ${Math.floor((trackingData.totalTime % 3600) / 60)} minutes`);
-                    console.log('Pushing final commit...');
+                    await git.add(dataFile);
+                    await git.commit(`Update coding stats: ${now.toISOString()}`);
                     await git.push('origin', 'main');
-                } catch (error) {
-                    console.error('Failed to commit final update:', error);
-                    vscode.window.showErrorMessage('Failed to commit final update: ' + error.message);
+                    lastCommitTime = now;
+                    await globalState.update('lastCommitTime', now.toISOString());
+                    sessionStart = new Date();
+                    await globalState.update('sessionStart', sessionStart.toISOString());
+                    vscode.window.showInformationMessage(`Committed coding stats. Total: ${Math.floor(trackingData.totalTime/3600)}h`);
+                } catch (e) {
+                    vscode.window.showErrorMessage('Auto-commit failed: ' + e.message);
                 }
             }
+        }, 60000);
 
-            // Clear the interval and reset tracking state
-            if (trackingInterval) {
-                clearInterval(trackingInterval);
-                trackingInterval = null;
-            }
-            isTracking = false;
-            
-            // Hide status bar
-            statusBarItem.hide();
-            
-            console.log('Successfully stopped tracking');
-            vscode.window.showInformationMessage(`Stopped code tracking. Total time coded: ${Math.floor(trackingData.totalTime / 3600)} hours ${Math.floor((trackingData.totalTime % 3600) / 60)} minutes`);
-        } catch (error) {
-            console.error('Failed to stop tracking:', error);
-            vscode.window.showErrorMessage('Failed to stop tracking: ' + error.message);
-        }
+        vscode.window.showInformationMessage('Started code tracking.');
     });
 
-    context.subscriptions.push(startTracking, stopTracking);
-    console.log('Extension activated and ready to track coding time');
+    const stopLogic = async () => {
+        if (!isTracking) return;
+        clearInterval(trackingInterval);
+        const now = new Date();
+        const sessSec = (now - sessionStart)/1000;
+        const dataFile = path.join(storagePath, 'coding-data.json');
+        let trackingData = fs.existsSync(dataFile)
+            ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
+            : { totalTime: 0, sessions: [] };
+        trackingData.totalTime += sessSec;
+        trackingData.sessions.push({ date: now.toISOString(), duration: sessSec, totalTime: trackingData.totalTime, type: 'final' });
+        fs.writeFileSync(dataFile, JSON.stringify(trackingData, null, 2));
+        const token = globalState.get('githubToken');
+        if (token) {
+            const git = simpleGit(storagePath);
+            const encoded = encodeURIComponent(token);
+            const remotes = await git.getRemotes(true);
+            const originExists = remotes.find(r => r.name === 'origin');
+
+            if (!originExists) {
+                await git.addRemote('origin', `https://${encoded}@github.com/${username}/${REPO_NAME}.git`);
+                console.log('Added remote origin');
+            } else {
+                await git.remote(['set-url', 'origin', `https://${encoded}@github.com/${username}/${REPO_NAME}.git`]);
+                console.log('Updated remote origin');
+            }
+
+            await git.add(dataFile);
+            await git.commit(`Final update: ${now.toISOString()}`);
+            await git.push('origin', 'main');
+        }
+        isTracking = false;
+        statusBarItem.hide();
+    };
+
+    const stopCmd = vscode.commands.registerCommand('code-tracking.stopTracking', async () => {
+        await stopLogic();
+        vscode.window.showInformationMessage('Stopped code tracking.');
+    });
+
+    context.subscriptions.push(startCmd, stopCmd);
 }
 
-function deactivate() {
-    if (trackingInterval) {
-        clearInterval(trackingInterval);
-    }
-    if (statusBarItem) {
-        statusBarItem.dispose();
-    }
-    isTracking = false;
-    console.log('Extension deactivated');
+async function deactivate() {
+    await stopLogic();
 }
 
 module.exports = {
     activate,
-    deactivate
+    deactivate: () => deactivate().catch(console.error)
 };
