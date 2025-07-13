@@ -12,7 +12,7 @@ A VS Code extension that helps you track your coding time and productivity by au
 
 ## Installation
 
-1. Install the extension from the VS Code Marketplace
+1. Just press f5 on extension.js to enter the debugging mode and follow along the setup steps.
 2. Create a GitHub Personal Access Token:
    - Go to [GitHub Settings > Developer Settings > Personal Access Tokens > Tokens (classic)](https://github.com/settings/tokens)
    - Click "Generate new token (classic)"
@@ -44,9 +44,10 @@ You can customize the extension's behavior in VS Code settings:
 ## Usage
 
 ### Start Tracking
-1. `Ctrl+Shift+P` / `Cmd+Shift+P`
-2. Type "Start Code Tracking"
-3. Watch your coding time in the status bar!
+1.f5 to enter debugging mode.
+2. `Ctrl+Shift+P` / `Cmd+Shift+P`
+3. Type "Start Code Tracking"
+4. Watch your coding time in the status bar!
 
 ### Stop Tracking
 1. `Ctrl+Shift+P` / `Cmd+Shift+P`
